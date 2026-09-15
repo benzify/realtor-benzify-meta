@@ -66,7 +66,6 @@
     const liveLink = document.getElementById('booking-live');
     liveLink.href = bookingUrl;
     liveLink.hidden = false;
-    document.getElementById('booking-status').hidden = true;
   }
   const videoSrc = safeHttps(config.videoSrc);
   if (videoSrc) {
