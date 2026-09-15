@@ -1,0 +1,35 @@
+name: Deploy to Hostinger
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hostinger-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main' && vars.HOSTINGER_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check JavaScript
+        run: |
+          node --check dist/app.js
+          node --check dist/config.js
+      - name: Publish static files
+        env:
+          HOSTINGER_HOST: ${{ vars.HOSTINGER_HOST }}
+          HOSTINGER_PORT: ${{ vars.HOSTINGER_PORT }}
+          HOSTINGER_USER: ${{ vars.HOSTINGER_USER }}
+          HOSTINGER_PATH: ${{ vars.HOSTINGER_PATH }}
+          HOSTINGER_URL: ${{ vars.HOSTINGER_URL }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          HOSTINGER_KNOWN_HOSTS: ${{ secrets.HOSTINGER_KNOWN_HOSTS }}
+        run: bash scripts/deploy-hostinger.sh
