@@ -67,8 +67,15 @@
     liveLink.href = bookingUrl;
     liveLink.hidden = false;
   }
+  const youtubeVideoId = /^[A-Za-z0-9_-]{11}$/.test(config.youtubeVideoId || '') ? config.youtubeVideoId : '';
   const videoSrc = safeHttps(config.videoSrc);
-  if (videoSrc) {
+  if (youtubeVideoId) {
+    const youtube = document.getElementById('testimonial-youtube');
+    const placeholder = document.getElementById('video-placeholder');
+    youtube.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(youtubeVideoId)}?rel=0&playsinline=1`;
+    youtube.hidden = false;
+    placeholder.hidden = true;
+  } else if (videoSrc) {
     const video = document.getElementById('testimonial-video');
     const placeholder = document.getElementById('video-placeholder');
     video.src = videoSrc;

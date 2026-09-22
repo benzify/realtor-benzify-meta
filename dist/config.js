@@ -2,6 +2,7 @@
 window.BENZIFY_CONFIG = Object.freeze({
   bookingUrl: 'https://calendly.com/rak-benzify/meta-ads-setup',
   videoSrc: '',
+  youtubeVideoId: 'Eegh_-6Znmk',
   videoPoster: '',
   analytics: Object.freeze({
     googleTagManagerId: '', // Example: GTM-XXXXXXX
