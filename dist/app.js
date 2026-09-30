@@ -46,14 +46,17 @@
     addScript(`https://www.clarity.ms/tag/${encodeURIComponent(clarityId)}`);
   }
 
-  // GA4 placeholder: set ga4MeasurementId in config.js to enable.
-  if (/^G-[A-Z0-9]+$/i.test(analytics.ga4MeasurementId || '')) {
-    const measurementId = analytics.ga4MeasurementId.toUpperCase();
+  // Google tag: configure GA4 and/or Google Ads while loading gtag.js only once.
+  const googleTagIds = [
+    /^G-[A-Z0-9]+$/i.test(analytics.ga4MeasurementId || '') ? analytics.ga4MeasurementId.toUpperCase() : '',
+    /^AW-[0-9]+$/i.test(analytics.googleAdsId || '') ? analytics.googleAdsId.toUpperCase() : ''
+  ].filter(Boolean);
+  if (googleTagIds.length) {
     window.dataLayer = window.dataLayer || [];
     window.gtag = window.gtag || function () { window.dataLayer.push(arguments); };
-    addScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(measurementId)}`);
+    addScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(googleTagIds[0])}`);
     window.gtag('js', new Date());
-    window.gtag('config', measurementId);
+    googleTagIds.forEach(id => window.gtag('config', id));
   }
 
   const safeHttps = value => {
