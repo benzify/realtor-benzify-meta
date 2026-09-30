@@ -7,8 +7,6 @@ window.BENZIFY_CONFIG = Object.freeze({
   analytics: Object.freeze({
     googleTagManagerId: '', // Example: GTM-XXXXXXX
     metaPixelId: '',        // Example: 123456789012345
-    microsoftClarityId: 'yjsbxks26d', // Example: abc123def4
-    ga4MeasurementId: 'G-KBM261X171', // Example: G-XXXXXXXXXX
-    googleAdsId: 'AW-18369421554' // Example: AW-XXXXXXXXXXX
+    microsoftClarityId: 'yjsbxks26d' // Example: abc123def4
   })
 });

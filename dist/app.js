@@ -46,26 +46,48 @@
     addScript(`https://www.clarity.ms/tag/${encodeURIComponent(clarityId)}`);
   }
 
-  // Google tag: configure GA4 and/or Google Ads while loading gtag.js only once.
-  const googleTagIds = [
-    /^G-[A-Z0-9]+$/i.test(analytics.ga4MeasurementId || '') ? analytics.ga4MeasurementId.toUpperCase() : '',
-    /^AW-[0-9]+$/i.test(analytics.googleAdsId || '') ? analytics.googleAdsId.toUpperCase() : ''
-  ].filter(Boolean);
-  if (googleTagIds.length) {
-    window.dataLayer = window.dataLayer || [];
-    window.gtag = window.gtag || function () { window.dataLayer.push(arguments); };
-    addScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(googleTagIds[0])}`);
-    window.gtag('js', new Date());
-    googleTagIds.forEach(id => window.gtag('config', id));
-  }
-
   const safeHttps = value => {
     try { const url = new URL(value); return url.protocol === 'https:' ? url.href : ''; }
     catch { return ''; }
   };
   const bookingUrl = safeHttps(config.bookingUrl);
   if (bookingUrl) {
-    document.querySelectorAll('[data-booking]').forEach(link => { link.href = bookingUrl; });
+    document.querySelectorAll('[data-booking]').forEach(link => {
+      link.href = bookingUrl;
+      link.addEventListener('click', event => {
+        if (typeof window.gtag !== 'function') return;
+
+        const opensSeparately = event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.target === '_blank';
+        const conversion = {
+          send_to: 'AW-18369421554/KJ60CICBqtscEPLBnLdE',
+          value: 1.0,
+          currency: 'USD'
+        };
+        if (opensSeparately) {
+          window.gtag('event', 'conversion', conversion);
+          return;
+        }
+
+        event.preventDefault();
+        let navigated = false;
+        const navigate = () => {
+          if (navigated) return;
+          navigated = true;
+          window.location.assign(link.href);
+        };
+        const fallback = window.setTimeout(navigate, 1000);
+        conversion.event_callback = () => {
+          window.clearTimeout(fallback);
+          navigate();
+        };
+        try {
+          window.gtag('event', 'conversion', conversion);
+        } catch {
+          window.clearTimeout(fallback);
+          navigate();
+        }
+      });
+    });
     const liveLink = document.getElementById('booking-live');
     liveLink.href = bookingUrl;
     liveLink.hidden = false;
