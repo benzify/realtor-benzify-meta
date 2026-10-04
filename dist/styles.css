@@ -61,7 +61,7 @@ nav { display: flex; gap: 28px; align-items: center; }
 .eyebrow-line { width: 23px; height: 2px; background: var(--blue); }
 .section { padding-block: 98px; }
 
-.hero { min-height: 650px; display: flex; align-items: center; padding: 68px 56px; background-image: linear-gradient(90deg, rgba(255,255,255,.99) 0%, rgba(255,255,255,.97) 42%, rgba(255,255,255,.58) 52%, rgba(255,255,255,0) 68%), url('assets/hero-bg.webp'); background-position: center; background-size: cover; background-repeat: no-repeat; border-radius: 16px; overflow: hidden; }
+.hero { min-height: 650px; display: flex; align-items: center; padding: 68px 56px; background-color: white; background-image: linear-gradient(90deg, rgba(255,255,255,.99) 0%, rgba(255,255,255,.97) 42%, rgba(255,255,255,.58) 52%, rgba(255,255,255,0) 68%), url('assets/hero-bg.webp'); background-position: center, center top; background-size: 100% 100%, contain; background-repeat: no-repeat; border-radius: 16px; overflow: hidden; }
 .hero-copy { width: 52%; max-width: 610px; }
 h1 { font-size: clamp(2.75rem, 4.05vw, 4.15rem); line-height: 1.06; letter-spacing: -.058em; }
 h1 > span { color: var(--blue); }
