@@ -19,10 +19,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Check JavaScript
+      - name: Check JavaScript and tracking behavior
         run: |
           node --check dist/app.js
           node --check dist/config.js
+          node --test tests/app.test.js
       - name: Publish static files
         env:
           HOSTINGER_HOST: ${{ vars.HOSTINGER_HOST }}
