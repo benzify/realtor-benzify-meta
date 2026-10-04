@@ -1,7 +1,8 @@
-// Public site configuration. Leave an optional analytics ID empty to keep it disabled.
+// Public site configuration. Conversion tracking fails closed until the Calendly
+// event-type UUID is copied here from a real test booking redirect.
 window.BENZIFY_CONFIG = Object.freeze({
   bookingUrl: 'https://calendly.com/rak-benzify/meta-ads-setup',
-  bookingConfirmationPath: '/booking-confirmed/?scheduled=1',
+  calendlyEventTypeUuid: '', // Example: 00000000-0000-4000-8000-000000000000
   videoSrc: '',
   youtubeVideoId: 'Eegh_-6Znmk',
   videoPoster: '',
@@ -10,9 +11,6 @@ window.BENZIFY_CONFIG = Object.freeze({
     // This existing conversion action must be named and configured in Google Ads
     // for a confirmed strategy-call booking, not for a Calendly-link click.
     googleAdsBookingConversionLabel: 'KJ60CICBqtscEPLBnLdE',
-    googleAnalyticsId: '', // Example: G-XXXXXXXXXX
-    googleTagManagerId: '', // Example: GTM-XXXXXXX
-    metaPixelId: '', // Example: 123456789012345
     microsoftClarityId: 'yjsbxks26d'
   })
 });

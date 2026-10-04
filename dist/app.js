@@ -3,16 +3,28 @@
 
   const config = window.BENZIFY_CONFIG || {};
   const analytics = config.analytics || {};
-  const attributionKeys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid'];
-  const attributionStorageKey = 'benzify_attribution_v1';
-  const journeyStorageKey = 'benzify_booking_journey_v1';
-  const convertedJourneyStorageKey = 'benzify_converted_journey_v1';
+  const attributionKeys = [
+    'utm_source',
+    'utm_medium',
+    'utm_campaign',
+    'utm_term',
+    'utm_content',
+    'gclid',
+    'gbraid',
+    'wbraid'
+  ];
+  const attributionStorageKey = 'benzify_attribution_v2';
+  const convertedBookingsStorageKey = 'benzify_converted_bookings_v2';
+  const confirmationSessionKey = 'benzify_booking_confirmation_v2';
+  const eventTypeCandidateSessionKey = 'benzify_calendly_event_type_uuid_candidate';
+  const attributionTtlMs = 30 * 24 * 60 * 60 * 1000;
+  const conversionTtlMs = 90 * 24 * 60 * 60 * 1000;
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-  const addScript = (src, attributes = {}) => {
+  const addScript = src => {
     const script = document.createElement('script');
     script.async = true;
     script.src = src;
-    Object.entries(attributes).forEach(([name, value]) => script.setAttribute(name, value));
     document.head.appendChild(script);
   };
 
@@ -25,38 +37,114 @@
     }
   };
 
-  const parseStoredJson = key => {
-    try { return JSON.parse(window.localStorage.getItem(key) || '{}'); }
-    catch { return {}; }
+  const getStorage = type => {
+    try { return window[type]; }
+    catch { return null; }
   };
 
-  const readStorage = key => {
-    try { return window.localStorage.getItem(key) || ''; }
-    catch { return ''; }
+  const parseStoredJson = (storage, key, fallback) => {
+    if (!storage) return fallback;
+    try {
+      const parsed = JSON.parse(storage.getItem(key) || 'null');
+      return parsed === null ? fallback : parsed;
+    } catch {
+      return fallback;
+    }
   };
 
-  const writeStorage = (key, value) => {
-    try { window.localStorage.setItem(key, value); return true; }
-    catch { return false; }
+  const writeStoredJson = (storage, key, value) => {
+    if (!storage) return false;
+    try {
+      storage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch {
+      return false;
+    }
   };
+
+  const removeStoredValue = (storage, key) => {
+    if (!storage) return;
+    try { storage.removeItem(key); }
+    catch { /* Storage can be unavailable in private or restricted contexts. */ }
+  };
+
+  const localStorage = getStorage('localStorage');
+  const sessionStorage = getStorage('sessionStorage');
+  const confirmationRoot = document.querySelector('[data-booking-confirmation]');
+
+  // Remove data written by the previous tracking implementation, including old
+  // landing-page URLs that may have contained Calendly redirect parameters.
+  ['benzify_attribution_v1', 'benzify_booking_journey_v1', 'benzify_converted_journey_v1']
+    .forEach(key => removeStoredValue(localStorage, key));
+
+  const readConfirmation = () => {
+    if (!confirmationRoot) return null;
+
+    const params = new URLSearchParams(window.location.search);
+    const expectedEventTypeUuid = String(config.calendlyEventTypeUuid || '').trim();
+    const eventTypeUuid = String(params.get('event_type_uuid') || '').trim();
+    const inviteeUuid = String(params.get('invitee_uuid') || '').trim();
+    const isConfigured = uuidPattern.test(expectedEventTypeUuid);
+    const hasValidRedirectDetails = params.get('scheduled') === '1'
+      && uuidPattern.test(eventTypeUuid)
+      && uuidPattern.test(inviteeUuid);
+    const isValidRedirect = hasValidRedirectDetails
+      && isConfigured
+      && eventTypeUuid.toLowerCase() === expectedEventTypeUuid.toLowerCase();
+
+    let confirmation = null;
+    if (hasValidRedirectDetails) {
+      writeStoredJson(sessionStorage, eventTypeCandidateSessionKey, eventTypeUuid);
+    }
+    if (isValidRedirect) {
+      confirmation = { eventTypeUuid, inviteeUuid };
+      writeStoredJson(sessionStorage, confirmationSessionKey, confirmation);
+    } else if (!window.location.search) {
+      const stored = parseStoredJson(sessionStorage, confirmationSessionKey, null);
+      if (stored && uuidPattern.test(stored.inviteeUuid || '')
+        && String(stored.eventTypeUuid || '').toLowerCase() === expectedEventTypeUuid.toLowerCase()) {
+        confirmation = stored;
+      }
+    }
+
+    if (window.location.search || window.location.hash) {
+      window.history.replaceState(null, document.title, window.location.pathname);
+    }
+
+    return confirmation;
+  };
+
+  // Calendly can append invitee PII to the redirect URL. Parse only the UUIDs
+  // needed for deduplication, then sanitize the address before tags load.
+  const confirmation = readConfirmation();
 
   const captureAttribution = () => {
-    const stored = parseStoredJson(attributionStorageKey);
+    const now = Date.now();
+    const stored = parseStoredJson(localStorage, attributionStorageKey, null);
+    const storedAt = stored ? Date.parse(stored.captured_at || '') : NaN;
+    const storedIsFresh = Number.isFinite(storedAt) && storedAt <= now && now - storedAt <= attributionTtlMs;
     const search = new URLSearchParams(window.location.search);
-    const attribution = { ...stored };
+    const incoming = {};
 
     attributionKeys.forEach(key => {
       const value = search.get(key);
-      if (value) attribution[key] = value.slice(0, 500);
+      if (value) incoming[key] = value.slice(0, 500);
     });
 
-    if (!attribution.first_landing_page) attribution.first_landing_page = window.location.href.slice(0, 1200);
-    if (!attribution.first_referrer && document.referrer) attribution.first_referrer = document.referrer.slice(0, 1200);
-    attribution.last_landing_page = window.location.href.slice(0, 1200);
-    attribution.updated_at = new Date().toISOString();
+    if (Object.keys(incoming).length) {
+      const attribution = {
+        ...incoming,
+        landing_page: window.location.href.slice(0, 1200),
+        referrer: document.referrer.slice(0, 1200),
+        captured_at: new Date(now).toISOString()
+      };
+      writeStoredJson(localStorage, attributionStorageKey, attribution);
+      return attribution;
+    }
 
-    writeStorage(attributionStorageKey, JSON.stringify(attribution));
-    return attribution;
+    if (storedIsFresh) return stored;
+    removeStoredValue(localStorage, attributionStorageKey);
+    return {};
   };
 
   const attribution = captureAttribution();
@@ -64,42 +152,11 @@
   window.dataLayer = window.dataLayer || [];
   window.gtag = window.gtag || function () { window.dataLayer.push(arguments); };
 
-  const directGoogleIds = [analytics.googleAnalyticsId, analytics.googleAdsId]
-    .filter(id => /^(G|AW)-[A-Z0-9]+$/i.test(id || ''))
-    .map(id => id.toUpperCase());
-
-  if (directGoogleIds.length) {
-    addScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(directGoogleIds[0])}`);
+  const adsId = String(analytics.googleAdsId || '').toUpperCase();
+  if (/^AW-[0-9]+$/.test(adsId)) {
+    addScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(adsId)}`);
     window.gtag('js', new Date());
-    directGoogleIds.forEach(id => window.gtag('config', id));
-  }
-
-  if (/^GTM-[A-Z0-9]+$/i.test(analytics.googleTagManagerId || '')) {
-    const id = analytics.googleTagManagerId.toUpperCase();
-    window.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
-    addScript(`https://www.googletagmanager.com/gtm.js?id=${encodeURIComponent(id)}`);
-    const frame = document.createElement('iframe');
-    frame.src = `https://www.googletagmanager.com/ns.html?id=${encodeURIComponent(id)}`;
-    frame.title = 'Google Tag Manager';
-    frame.width = '0';
-    frame.height = '0';
-    frame.hidden = true;
-    document.body.prepend(frame);
-  }
-
-  if (/^[0-9]+$/.test(analytics.metaPixelId || '')) {
-    const pixelId = analytics.metaPixelId;
-    window.fbq = window.fbq || function () {
-      window.fbq.callMethod ? window.fbq.callMethod.apply(window.fbq, arguments) : window.fbq.queue.push(arguments);
-    };
-    if (!window._fbq) window._fbq = window.fbq;
-    window.fbq.push = window.fbq;
-    window.fbq.loaded = true;
-    window.fbq.version = '2.0';
-    window.fbq.queue = [];
-    addScript('https://connect.facebook.net/en_US/fbevents.js');
-    window.fbq('init', pixelId);
-    window.fbq('track', 'PageView');
+    window.gtag('config', adsId);
   }
 
   if (/^[a-z0-9]+$/i.test(analytics.microsoftClarityId || '')) {
@@ -108,18 +165,17 @@
     addScript(`https://www.clarity.ms/tag/${encodeURIComponent(clarityId)}`);
   }
 
-  const trackEvent = (name, parameters = {}) => {
-    const eventParameters = {
-      ...parameters,
-      page_location: window.location.href,
-      transport_type: 'beacon'
-    };
-    window.gtag('event', name, eventParameters);
+  const createDiagnosticId = () => {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    return `cta-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   };
 
-  const createJourneyId = () => {
-    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
-    return `booking-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const pushInternalEvent = (event, parameters = {}) => {
+    window.dataLayer.push({
+      event,
+      ...parameters,
+      page_location: window.location.href
+    });
   };
 
   const bookingUrl = safeHttps(config.bookingUrl);
@@ -136,12 +192,12 @@
     document.querySelectorAll('[data-booking]').forEach(link => {
       link.href = buildBookingUrl();
       link.addEventListener('click', () => {
-        const journeyId = createJourneyId();
-        writeStorage(journeyStorageKey, journeyId);
-
-        const ctaLocation = link.dataset.ctaLocation || 'unknown';
-        trackEvent('cta_click', { cta_location: ctaLocation, booking_journey_id: journeyId });
-        trackEvent('calendly_visit', { cta_location: ctaLocation, booking_journey_id: journeyId });
+        const details = {
+          cta_location: link.dataset.ctaLocation || 'unknown',
+          diagnostic_id: createDiagnosticId()
+        };
+        pushInternalEvent('cta_click', details);
+        pushInternalEvent('calendly_visit', details);
       });
     });
   }
@@ -169,57 +225,53 @@
     });
   }
 
-  const trackConfirmedBooking = () => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('scheduled') !== '1') return false;
+  const readConvertedBookings = () => {
+    const now = Date.now();
+    const stored = parseStoredJson(localStorage, convertedBookingsStorageKey, []);
+    if (!Array.isArray(stored)) return [];
+    return stored.filter(entry => entry
+      && uuidPattern.test(entry.id || '')
+      && Number.isFinite(entry.convertedAt)
+      && entry.convertedAt <= now
+      && now - entry.convertedAt <= conversionTtlMs)
+      .slice(-100);
+  };
 
-    const journeyId = readStorage(journeyStorageKey) || params.get('event_uuid') || 'direct-booking-confirmation';
-    if (readStorage(convertedJourneyStorageKey) === journeyId) return true;
+  const trackConfirmedBooking = booking => {
+    if (!booking) return false;
+    if (Number.isFinite(booking.convertedAt)) return true;
 
-    const conversionParameters = {
-      booking_journey_id: journeyId,
-      lead_source: attribution.utm_source || 'direct',
-      lead_medium: attribution.utm_medium || 'none',
-      lead_campaign: attribution.utm_campaign || 'not_set',
-      gclid_present: Boolean(attribution.gclid)
-    };
-    trackEvent('strategy_call_scheduled', conversionParameters);
-
-    const adsId = analytics.googleAdsId || '';
-    const conversionLabel = analytics.googleAdsBookingConversionLabel || '';
-    if (/^AW-[0-9]+$/.test(adsId) && /^[A-Za-z0-9_-]+$/.test(conversionLabel)) {
-      window.gtag('event', 'conversion', {
-        send_to: `${adsId}/${conversionLabel}`,
-        value: 1.0,
-        currency: 'USD',
-        transaction_id: journeyId,
-        transport_type: 'beacon'
-      });
+    const convertedBookings = readConvertedBookings();
+    if (convertedBookings.some(entry => entry.id.toLowerCase() === booking.inviteeUuid.toLowerCase())) {
+      writeStoredJson(sessionStorage, confirmationSessionKey, { ...booking, convertedAt: Date.now() });
+      return true;
     }
 
-    writeStorage(convertedJourneyStorageKey, journeyId);
+    const conversionLabel = analytics.googleAdsBookingConversionLabel || '';
+    if (!/^AW-[0-9]+$/.test(adsId) || !/^[A-Za-z0-9_-]+$/.test(conversionLabel)) return false;
+
+    window.gtag('event', 'conversion', {
+      send_to: `${adsId}/${conversionLabel}`,
+      value: 1.0,
+      currency: 'USD',
+      transaction_id: booking.inviteeUuid,
+      page_location: window.location.href,
+      transport_type: 'beacon'
+    });
+
+    convertedBookings.push({ id: booking.inviteeUuid, convertedAt: Date.now() });
+    writeStoredJson(localStorage, convertedBookingsStorageKey, convertedBookings.slice(-100));
+    writeStoredJson(sessionStorage, confirmationSessionKey, { ...booking, convertedAt: Date.now() });
     return true;
   };
 
-  const confirmationRoot = document.querySelector('[data-booking-confirmation]');
   if (confirmationRoot) {
-    const scheduled = trackConfirmedBooking();
+    const scheduled = trackConfirmedBooking(confirmation);
     const confirmedContent = document.querySelector('[data-confirmed-content]');
     const unconfirmedContent = document.querySelector('[data-unconfirmed-content]');
     if (confirmedContent) confirmedContent.hidden = !scheduled;
     if (unconfirmedContent) unconfirmedContent.hidden = scheduled;
   }
-
-  // Integration hook for a trusted CRM or server-side workflow. These stages are
-  // not inferred by the public page and should only be sent after staff validation.
-  window.BenzifyTracking = Object.freeze({
-    recordLeadStage(stage, details = {}) {
-      if (!['qualified_strategy_call', 'strategy_call_attended'].includes(stage)) return false;
-      trackEvent(stage, { ...details, source: 'crm_integration' });
-      return true;
-    },
-    attribution: Object.freeze({ ...attribution })
-  });
 
   const year = document.getElementById('year');
   if (year) year.textContent = new Date().getFullYear();
