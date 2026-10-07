@@ -26,6 +26,7 @@
     script.async = true;
     script.src = src;
     document.head.appendChild(script);
+    return script;
   };
 
   const safeHttps = value => {
@@ -188,18 +189,51 @@
     return url.href;
   };
 
-  if (bookingUrl) {
+  const recordCalendlyOpen = location => {
+    const details = {
+      cta_location: location || 'unknown',
+      diagnostic_id: createDiagnosticId()
+    };
+    pushInternalEvent('cta_click', details);
+    pushInternalEvent('calendly_visit', details);
+    if (typeof window.clarity === 'function') {
+      window.clarity('set', 'calendly_cta_location', details.cta_location);
+      window.clarity('event', 'calendly_open');
+    }
+  };
+
+  const openCalendlyPopup = (event, location) => {
+    recordCalendlyOpen(location);
+    if (!window.Calendly || typeof window.Calendly.initPopupWidget !== 'function') return;
+    event.preventDefault();
+    window.Calendly.initPopupWidget({ url: buildBookingUrl() });
+  };
+
+  const initializeCalendlyBadge = () => {
+    if (!window.Calendly || typeof window.Calendly.initBadgeWidget !== 'function') return;
+    window.Calendly.initBadgeWidget({
+      url: buildBookingUrl(),
+      text: 'Book a free strategy call',
+      color: '#0069ff',
+      textColor: '#ffffff',
+      branding: true
+    });
+    const badge = document.querySelector('.calendly-badge-widget');
+    if (badge) badge.addEventListener('click', () => recordCalendlyOpen('calendly_badge'));
+  };
+
+  if (bookingUrl && !confirmationRoot) {
     document.querySelectorAll('[data-booking]').forEach(link => {
       link.href = buildBookingUrl();
-      link.addEventListener('click', () => {
-        const details = {
-          cta_location: link.dataset.ctaLocation || 'unknown',
-          diagnostic_id: createDiagnosticId()
-        };
-        pushInternalEvent('cta_click', details);
-        pushInternalEvent('calendly_visit', details);
-      });
+      link.addEventListener('click', event => openCalendlyPopup(event, link.dataset.ctaLocation));
     });
+
+    if (window.Calendly) {
+      initializeCalendlyBadge();
+    } else {
+      const calendlyScript = addScript('https://assets.calendly.com/assets/external/widget.js');
+      calendlyScript.addEventListener('load', initializeCalendlyBadge, { once: true });
+    }
   }
 
   const youtubeVideoId = /^[A-Za-z0-9_-]{11}$/.test(config.youtubeVideoId || '') ? config.youtubeVideoId : '';
@@ -264,6 +298,26 @@
     writeStoredJson(sessionStorage, confirmationSessionKey, { ...booking, convertedAt: Date.now() });
     return true;
   };
+
+  const uuidFromCalendlyUri = value => {
+    const match = String(value || '').match(/\/([0-9a-f-]{36})(?:\/?(?:\?.*)?)$/i);
+    return match && uuidPattern.test(match[1]) ? match[1] : '';
+  };
+
+  window.addEventListener('message', event => {
+    if (event.origin !== 'https://calendly.com') return;
+    if (!event.data || event.data.event !== 'calendly.event_scheduled') return;
+
+    const expectedEventTypeUuid = String(config.calendlyEventTypeUuid || '').trim();
+    const inviteeUuid = uuidFromCalendlyUri(event.data.payload
+      && event.data.payload.invitee
+      && event.data.payload.invitee.uri);
+    if (!uuidPattern.test(expectedEventTypeUuid) || !inviteeUuid) return;
+
+    const booking = { eventTypeUuid: expectedEventTypeUuid, inviteeUuid };
+    writeStoredJson(sessionStorage, confirmationSessionKey, booking);
+    trackConfirmedBooking(booking);
+  });
 
   if (confirmationRoot) {
     const scheduled = trackConfirmedBooking(confirmation);
