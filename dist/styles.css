@@ -191,7 +191,6 @@ h1 > span { color: var(--blue); }
 .footer { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-block: 38px; }
 .footer .logo-crop { width: 130px; }
 .footer p, .footer > span { font-size: .72rem; color: var(--text); }
-.mobile-cta { display: none; }
 
 .confirmation-page { min-height: 100vh; background: var(--light); display: flex; flex-direction: column; }
 .confirmation-header { border-bottom: 0; }
@@ -281,11 +280,10 @@ h1 > span { color: var(--blue); }
   .booking-panel h2 { font-size: 2rem; }
   .booking-panel .button { font-size: .85rem; padding-inline: 16px; }
   .booking-note { line-height: 1.55; }
-  .footer { flex-wrap: wrap; justify-content: center; gap: 8px; padding-block: 29px 110px; text-align: center; }
+  .footer { flex-wrap: wrap; justify-content: center; gap: 8px; padding-block: 29px; text-align: center; }
   .footer .brand { width: 100%; justify-content: center; }
   .footer > span { width: 100%; }
-  .mobile-cta { display: block; position: fixed; bottom: 0; left: 0; right: 0; padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); background: #fffffff2; border-top: 1px solid var(--line); backdrop-filter: blur(12px); z-index: 10; }
-  .mobile-cta .button { width: 100%; min-height: 52px; padding-block: 13px; }
+  .calendly-badge-widget { bottom: calc(15px + env(safe-area-inset-bottom)) !important; }
   body { padding-bottom: env(safe-area-inset-bottom); }
   #booking { scroll-margin-bottom: 100px; }
   .confirmation-main { padding-inline: 16px; }

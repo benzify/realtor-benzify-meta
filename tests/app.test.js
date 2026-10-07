@@ -22,6 +22,7 @@ const makeElement = () => ({
   hidden: false,
   dataset: {},
   addEventListener(type, listener) { this.listeners = { ...(this.listeners || {}), [type]: listener }; },
+  dispatch(type, event = {}) { if (this.listeners && this.listeners[type]) this.listeners[type](event); },
   querySelector() { return { textContent: '' }; }
 });
 
@@ -32,13 +33,22 @@ const runApp = ({
   sessionStorage = new MemoryStorage(),
   includeConfirmation = false,
   includeBookingLink = false,
-  cryptoAvailable = true
+  cryptoAvailable = true,
+  calendlyAvailable = false,
+  clarityAvailable = false
 } = {}) => {
   let currentUrl = new URL(url);
   const scripts = [];
+  const scriptElements = [];
+  const windowListeners = {};
+  const popupCalls = [];
+  const badgeCalls = [];
+  const clarityCalls = [];
   const confirmedContent = makeElement();
   const unconfirmedContent = makeElement();
   const bookingLink = makeElement();
+  bookingLink.dataset.ctaLocation = 'hero';
+  const badge = makeElement();
   const confirmationRoot = includeConfirmation ? makeElement() : null;
 
   const location = {};
@@ -56,12 +66,13 @@ const runApp = ({
   const document = {
     title: 'Test',
     referrer: '',
-    head: { appendChild: element => scripts.push(element.src) },
+    head: { appendChild: element => { scripts.push(element.src); scriptElements.push(element); } },
     createElement: () => makeElement(),
     querySelector(selector) {
       if (selector === '[data-booking-confirmation]') return confirmationRoot;
       if (selector === '[data-confirmed-content]') return confirmedContent;
       if (selector === '[data-unconfirmed-content]') return unconfirmedContent;
+      if (selector === '.calendly-badge-widget') return badge;
       return null;
     },
     querySelectorAll(selector) {
@@ -86,8 +97,16 @@ const runApp = ({
     location,
     history: { replaceState: (_state, _title, nextUrl) => updateLocation(nextUrl) },
     localStorage,
-    sessionStorage
+    sessionStorage,
+    addEventListener(type, listener) { windowListeners[type] = listener; }
   };
+  if (calendlyAvailable) {
+    window.Calendly = {
+      initPopupWidget: options => popupCalls.push(options),
+      initBadgeWidget: options => badgeCalls.push(options)
+    };
+  }
+  if (clarityAvailable) window.clarity = (...args) => clarityCalls.push(args);
   if (cryptoAvailable) {
     window.crypto = { randomUUID: () => '44444444-4444-4444-8444-444444444444' };
   }
@@ -119,8 +138,14 @@ const runApp = ({
     conversions,
     location,
     scripts,
+    scriptElements,
+    popupCalls,
+    badge,
+    badgeCalls,
+    clarityCalls,
     unconfirmedContent,
-    window
+    window,
+    dispatchMessage(event) { windowListeners.message(event); }
   };
 };
 
@@ -232,13 +257,85 @@ test('separate tabs convert distinct invitees without a shared journey key', () 
   assert.equal(localStorage.getItem('benzify_booking_journey_v1'), null);
 });
 
-test('CTA diagnostics work without crypto.randomUUID and do not block navigation', () => {
-  const result = runApp({ includeBookingLink: true, cryptoAvailable: false });
-  result.bookingLink.listeners.click({ metaKey: true });
+test('CTA opens the Calendly popup and emits dataLayer and Clarity diagnostics', () => {
+  const result = runApp({
+    includeBookingLink: true,
+    cryptoAvailable: false,
+    calendlyAvailable: true,
+    clarityAvailable: true
+  });
+  let prevented = false;
+  result.bookingLink.listeners.click({ preventDefault: () => { prevented = true; } });
   const diagnostics = result.window.dataLayer.filter(entry => entry && entry.event);
 
+  assert.equal(prevented, true);
+  assert.equal(result.popupCalls.length, 1);
+  assert.match(result.popupCalls[0].url, /meta-ads-setup/);
   assert.deepEqual(Array.from(diagnostics, entry => entry.event), ['cta_click', 'calendly_visit']);
+  assert.equal(diagnostics[0].cta_location, 'hero');
   assert.match(diagnostics[0].diagnostic_id, /^cta-[0-9]+-[a-z0-9]+$/);
+  assert.deepEqual(result.clarityCalls, [
+    ['set', 'calendly_cta_location', 'hero'],
+    ['event', 'calendly_open']
+  ]);
+});
+
+test('CTA remains a normal attributed link before Calendly loads', () => {
+  const result = runApp({
+    url: 'https://realtors.benzify.us/?utm_source=google&gclid=test-click',
+    includeBookingLink: true
+  });
+  let prevented = false;
+  result.bookingLink.listeners.click({ preventDefault: () => { prevented = true; } });
+
+  assert.equal(prevented, false);
+  assert.match(result.bookingLink.href, /utm_source=google/);
+  assert.match(result.bookingLink.href, /gclid=test-click/);
+  assert.equal(result.popupCalls.length, 0);
+});
+
+test('Calendly script initializes one attributed badge and tracks its source', () => {
+  const result = runApp({
+    url: 'https://realtors.benzify.us/?utm_campaign=seller-leads',
+    includeBookingLink: true
+  });
+  result.window.Calendly = {
+    initPopupWidget: options => result.popupCalls.push(options),
+    initBadgeWidget: options => result.badgeCalls.push(options)
+  };
+  const calendlyScript = result.scriptElements.find(element => /calendly/.test(element.src));
+  calendlyScript.dispatch('load');
+  result.badge.dispatch('click');
+
+  assert.equal(result.badgeCalls.length, 1);
+  assert.equal(result.badgeCalls[0].text, 'Book a free strategy call');
+  assert.match(result.badgeCalls[0].url, /utm_campaign=seller-leads/);
+  const diagnostics = result.window.dataLayer.filter(entry => entry && entry.event);
+  assert.equal(diagnostics[0].cta_location, 'calendly_badge');
+});
+
+test('trusted Calendly scheduled events convert once and reject invalid messages', () => {
+  const localStorage = new MemoryStorage();
+  const result = runApp({ localStorage });
+  const scheduledEvent = {
+    data: {
+      event: 'calendly.event_scheduled',
+      payload: { invitee: { uri: `https://api.calendly.com/scheduled_events/event/invitees/${inviteeUuid}` } }
+    }
+  };
+
+  result.dispatchMessage({ ...scheduledEvent, origin: 'https://attacker.example' });
+  result.dispatchMessage({ origin: 'https://calendly.com', data: { event: 'calendly.event_scheduled', payload: {} } });
+  assert.equal(result.conversions.length, 0);
+
+  result.dispatchMessage({ ...scheduledEvent, origin: 'https://calendly.com' });
+  result.dispatchMessage({ ...scheduledEvent, origin: 'https://calendly.com' });
+  const conversions = result.window.dataLayer
+    .filter(entry => Object.prototype.toString.call(entry) === '[object Arguments]')
+    .map(entry => Array.from(entry))
+    .filter(entry => entry[0] === 'event' && entry[1] === 'conversion');
+  assert.equal(conversions.length, 1);
+  assert.equal(conversions[0][2].transaction_id, inviteeUuid);
 });
 
 test('legacy tracking storage is removed', () => {
@@ -254,10 +351,11 @@ test('legacy tracking storage is removed', () => {
   assert.equal(localStorage.getItem('benzify_converted_journey_v1'), null);
 });
 
-test('only Google Ads and Clarity scripts are requested', () => {
+test('only Google Ads, Clarity, and Calendly scripts are requested', () => {
   const result = runApp();
   assert.deepEqual(result.scripts, [
     'https://www.googletagmanager.com/gtag/js?id=AW-18369421554',
-    'https://www.clarity.ms/tag/yjsbxks26d'
+    'https://www.clarity.ms/tag/yjsbxks26d',
+    'https://assets.calendly.com/assets/external/widget.js'
   ]);
 });
