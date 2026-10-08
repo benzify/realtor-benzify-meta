@@ -14,9 +14,8 @@
     'wbraid'
   ];
   const attributionStorageKey = 'benzify_attribution_v2';
-  const convertedBookingsStorageKey = 'benzify_converted_bookings_v2';
-  const confirmationSessionKey = 'benzify_booking_confirmation_v2';
-  const eventTypeCandidateSessionKey = 'benzify_calendly_event_type_uuid_candidate';
+  const openAiConvertedBookingsStorageKey = 'benzify_openai_converted_bookings_v1';
+  const openAiConfirmationSessionKey = 'benzify_openai_booking_confirmation_v1';
   const attributionTtlMs = 30 * 24 * 60 * 60 * 1000;
   const conversionTtlMs = 90 * 24 * 60 * 60 * 1000;
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -78,46 +77,11 @@
   ['benzify_attribution_v1', 'benzify_booking_journey_v1', 'benzify_converted_journey_v1']
     .forEach(key => removeStoredValue(localStorage, key));
 
-  const readConfirmation = () => {
-    if (!confirmationRoot) return null;
-
-    const params = new URLSearchParams(window.location.search);
-    const expectedEventTypeUuid = String(config.calendlyEventTypeUuid || '').trim();
-    const eventTypeUuid = String(params.get('event_type_uuid') || '').trim();
-    const inviteeUuid = String(params.get('invitee_uuid') || '').trim();
-    const isConfigured = uuidPattern.test(expectedEventTypeUuid);
-    const hasValidRedirectDetails = params.get('scheduled') === '1'
-      && uuidPattern.test(eventTypeUuid)
-      && uuidPattern.test(inviteeUuid);
-    const isValidRedirect = hasValidRedirectDetails
-      && isConfigured
-      && eventTypeUuid.toLowerCase() === expectedEventTypeUuid.toLowerCase();
-
-    let confirmation = null;
-    if (hasValidRedirectDetails) {
-      writeStoredJson(sessionStorage, eventTypeCandidateSessionKey, eventTypeUuid);
-    }
-    if (isValidRedirect) {
-      confirmation = { eventTypeUuid, inviteeUuid };
-      writeStoredJson(sessionStorage, confirmationSessionKey, confirmation);
-    } else if (!window.location.search) {
-      const stored = parseStoredJson(sessionStorage, confirmationSessionKey, null);
-      if (stored && uuidPattern.test(stored.inviteeUuid || '')
-        && String(stored.eventTypeUuid || '').toLowerCase() === expectedEventTypeUuid.toLowerCase()) {
-        confirmation = stored;
-      }
-    }
-
-    if (window.location.search || window.location.hash) {
-      window.history.replaceState(null, document.title, window.location.pathname);
-    }
-
-    return confirmation;
-  };
-
-  // Calendly can append invitee PII to the redirect URL. Parse only the UUIDs
-  // needed for deduplication, then sanitize the address before tags load.
-  const confirmation = readConfirmation();
+  // The free Calendly plan does not use a booking redirect. Sanitize this legacy
+  // page without trusting query parameters as evidence that a booking occurred.
+  if (confirmationRoot && (window.location.search || window.location.hash)) {
+    window.history.replaceState(null, document.title, window.location.pathname);
+  }
 
   const captureAttribution = () => {
     const now = Date.now();
@@ -272,9 +236,9 @@
     });
   }
 
-  const readConvertedBookings = () => {
+  const readOpenAiConvertedBookings = () => {
     const now = Date.now();
-    const stored = parseStoredJson(localStorage, convertedBookingsStorageKey, []);
+    const stored = parseStoredJson(localStorage, openAiConvertedBookingsStorageKey, []);
     if (!Array.isArray(stored)) return [];
     return stored.filter(entry => entry
       && uuidPattern.test(entry.id || '')
@@ -284,49 +248,34 @@
       .slice(-100);
   };
 
-  const trackConfirmedBooking = booking => {
-    if (!booking) return false;
-    if (Number.isFinite(booking.convertedAt)) return true;
+  const trackOpenAiBooking = inviteeUuid => {
+    if (!uuidPattern.test(inviteeUuid || '')) return false;
 
-    const convertedBookings = readConvertedBookings();
-    if (convertedBookings.some(entry => entry.id.toLowerCase() === booking.inviteeUuid.toLowerCase())) {
-      writeStoredJson(sessionStorage, confirmationSessionKey, { ...booking, convertedAt: Date.now() });
+    const sessionBooking = parseStoredJson(sessionStorage, openAiConfirmationSessionKey, null);
+    if (sessionBooking
+      && String(sessionBooking.id || '').toLowerCase() === inviteeUuid.toLowerCase()
+      && Number.isFinite(sessionBooking.convertedAt)) return true;
+
+    const convertedBookings = readOpenAiConvertedBookings();
+    if (convertedBookings.some(entry => entry.id.toLowerCase() === inviteeUuid.toLowerCase())) {
+      writeStoredJson(sessionStorage, openAiConfirmationSessionKey, { id: inviteeUuid, convertedAt: Date.now() });
       return true;
     }
 
-    let tracked = false;
-    const conversionLabel = analytics.googleAdsBookingConversionLabel || '';
-    if (/^AW-[0-9]+$/.test(adsId) && /^[A-Za-z0-9_-]+$/.test(conversionLabel)) {
-      try {
-        window.gtag('event', 'conversion', {
-          send_to: `${adsId}/${conversionLabel}`,
-          value: 1.0,
-          currency: 'USD',
-          transaction_id: booking.inviteeUuid,
-          page_location: window.location.href,
-          transport_type: 'beacon'
-        });
-        tracked = true;
-      } catch { /* One analytics destination must not suppress another. */ }
-    }
+    if (!/^[A-Za-z0-9_-]+$/.test(openAiPixelId) || typeof window.oaiq !== 'function') return false;
+    try {
+      window.oaiq(
+        'measure',
+        'appointment_scheduled',
+        { type: 'customer_action' },
+        { event_id: inviteeUuid }
+      );
+    } catch { return false; }
 
-    if (/^[A-Za-z0-9_-]+$/.test(openAiPixelId) && typeof window.oaiq === 'function') {
-      try {
-        window.oaiq(
-          'measure',
-          'appointment_scheduled',
-          { type: 'customer_action' },
-          { event_id: booking.inviteeUuid }
-        );
-        tracked = true;
-      } catch { /* One analytics destination must not suppress another. */ }
-    }
-
-    if (!tracked) return false;
-
-    convertedBookings.push({ id: booking.inviteeUuid, convertedAt: Date.now() });
-    writeStoredJson(localStorage, convertedBookingsStorageKey, convertedBookings.slice(-100));
-    writeStoredJson(sessionStorage, confirmationSessionKey, { ...booking, convertedAt: Date.now() });
+    const convertedAt = Date.now();
+    convertedBookings.push({ id: inviteeUuid, convertedAt });
+    writeStoredJson(localStorage, openAiConvertedBookingsStorageKey, convertedBookings.slice(-100));
+    writeStoredJson(sessionStorage, openAiConfirmationSessionKey, { id: inviteeUuid, convertedAt });
     return true;
   };
 
@@ -339,23 +288,18 @@
     if (event.origin !== 'https://calendly.com') return;
     if (!event.data || event.data.event !== 'calendly.event_scheduled') return;
 
-    const expectedEventTypeUuid = String(config.calendlyEventTypeUuid || '').trim();
     const inviteeUuid = uuidFromCalendlyUri(event.data.payload
       && event.data.payload.invitee
       && event.data.payload.invitee.uri);
-    if (!uuidPattern.test(expectedEventTypeUuid) || !inviteeUuid) return;
-
-    const booking = { eventTypeUuid: expectedEventTypeUuid, inviteeUuid };
-    writeStoredJson(sessionStorage, confirmationSessionKey, booking);
-    trackConfirmedBooking(booking);
+    if (!inviteeUuid) return;
+    trackOpenAiBooking(inviteeUuid);
   });
 
   if (confirmationRoot) {
-    const scheduled = trackConfirmedBooking(confirmation);
     const confirmedContent = document.querySelector('[data-confirmed-content]');
     const unconfirmedContent = document.querySelector('[data-unconfirmed-content]');
-    if (confirmedContent) confirmedContent.hidden = !scheduled;
-    if (unconfirmedContent) unconfirmedContent.hidden = scheduled;
+    if (confirmedContent) confirmedContent.hidden = true;
+    if (unconfirmedContent) unconfirmedContent.hidden = false;
   }
 
   const year = document.getElementById('year');
