@@ -160,6 +160,19 @@
     window.gtag('config', adsId);
   }
 
+  const openAiPixelId = String(analytics.openAiPixelId || '').trim();
+  if (/^[A-Za-z0-9_-]+$/.test(openAiPixelId)) {
+    if (!window.oaiq) {
+      window.oaiq = function () { window.oaiq.q.push(arguments); };
+      window.oaiq.q = [];
+      addScript('https://bzrcdn.openai.com/sdk/oaiq.min.js');
+    }
+    window.oaiq('init', {
+      pixelId: openAiPixelId,
+      debug: analytics.openAiPixelDebug === true
+    });
+  }
+
   if (/^[a-z0-9]+$/i.test(analytics.microsoftClarityId || '')) {
     const clarityId = analytics.microsoftClarityId;
     window.clarity = window.clarity || function () { (window.clarity.q = window.clarity.q || []).push(arguments); };
@@ -281,17 +294,35 @@
       return true;
     }
 
+    let tracked = false;
     const conversionLabel = analytics.googleAdsBookingConversionLabel || '';
-    if (!/^AW-[0-9]+$/.test(adsId) || !/^[A-Za-z0-9_-]+$/.test(conversionLabel)) return false;
+    if (/^AW-[0-9]+$/.test(adsId) && /^[A-Za-z0-9_-]+$/.test(conversionLabel)) {
+      try {
+        window.gtag('event', 'conversion', {
+          send_to: `${adsId}/${conversionLabel}`,
+          value: 1.0,
+          currency: 'USD',
+          transaction_id: booking.inviteeUuid,
+          page_location: window.location.href,
+          transport_type: 'beacon'
+        });
+        tracked = true;
+      } catch { /* One analytics destination must not suppress another. */ }
+    }
 
-    window.gtag('event', 'conversion', {
-      send_to: `${adsId}/${conversionLabel}`,
-      value: 1.0,
-      currency: 'USD',
-      transaction_id: booking.inviteeUuid,
-      page_location: window.location.href,
-      transport_type: 'beacon'
-    });
+    if (/^[A-Za-z0-9_-]+$/.test(openAiPixelId) && typeof window.oaiq === 'function') {
+      try {
+        window.oaiq(
+          'measure',
+          'appointment_scheduled',
+          { type: 'customer_action' },
+          { event_id: booking.inviteeUuid }
+        );
+        tracked = true;
+      } catch { /* One analytics destination must not suppress another. */ }
+    }
+
+    if (!tracked) return false;
 
     convertedBookings.push({ id: booking.inviteeUuid, convertedAt: Date.now() });
     writeStoredJson(localStorage, convertedBookingsStorageKey, convertedBookings.slice(-100));

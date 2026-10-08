@@ -11,6 +11,9 @@ window.BENZIFY_CONFIG = Object.freeze({
     // This existing conversion action must be named and configured in Google Ads
     // for a confirmed strategy-call booking, not for a Calendly-link click.
     googleAdsBookingConversionLabel: 'KJ60CICBqtscEPLBnLdE',
+    openAiPixelId: 'AePTapRBZACszVQxvzZ727',
+    // Enable only while verifying the OpenAI Measurement Pixel in a test deployment.
+    openAiPixelDebug: false,
     microsoftClarityId: 'yjsbxks26d'
   })
 });
