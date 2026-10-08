@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const appSource = fs.readFileSync(path.join(__dirname, '..', 'dist', 'app.js'), 'utf8');
+const landingPageSource = fs.readFileSync(path.join(__dirname, '..', 'dist', 'index.html'), 'utf8');
+const confirmationPageSource = fs.readFileSync(path.join(__dirname, '..', 'dist', 'booking-confirmed', 'index.html'), 'utf8');
 const eventTypeUuid = '11111111-1111-4111-8111-111111111111';
 const inviteeUuid = '22222222-2222-4222-8222-222222222222';
 
@@ -35,7 +37,9 @@ const runApp = ({
   includeBookingLink = false,
   cryptoAvailable = true,
   calendlyAvailable = false,
-  clarityAvailable = false
+  clarityAvailable = false,
+  googleAdsId = 'AW-18369421554',
+  openAiPixelId = 'AePTapRBZACszVQxvzZ727'
 } = {}) => {
   let currentUrl = new URL(url);
   const scripts = [];
@@ -89,8 +93,10 @@ const runApp = ({
       videoSrc: '',
       videoPoster: '',
       analytics: {
-        googleAdsId: 'AW-18369421554',
+        googleAdsId,
         googleAdsBookingConversionLabel: 'KJ60CICBqtscEPLBnLdE',
+        openAiPixelId,
+        openAiPixelDebug: false,
         microsoftClarityId: 'yjsbxks26d'
       }
     },
@@ -131,12 +137,15 @@ const runApp = ({
     .filter(entry => Object.prototype.toString.call(entry) === '[object Arguments]')
     .map(entry => Array.from(entry))
     .filter(entry => entry[0] === 'event' && entry[1] === 'conversion');
+  const openAiCalls = (window.oaiq && window.oaiq.q ? window.oaiq.q : [])
+    .map(entry => JSON.parse(JSON.stringify(Array.from(entry))));
 
   return {
     bookingLink,
     confirmedContent,
     conversions,
     location,
+    openAiCalls,
     scripts,
     scriptElements,
     popupCalls,
@@ -159,6 +168,12 @@ test('a matching Calendly redirect is sanitized and converted once', () => {
   assert.equal(first.conversions.length, 1);
   assert.equal(first.conversions[0][2].transaction_id, inviteeUuid);
   assert.equal(first.conversions[0][2].page_location, 'https://realtors.benzify.us/booking-confirmed/');
+  assert.deepEqual(first.openAiCalls[1], [
+    'measure',
+    'appointment_scheduled',
+    { type: 'customer_action' },
+    { event_id: inviteeUuid }
+  ]);
   assert.equal(first.confirmedContent.hidden, false);
   assert.equal(first.unconfirmedContent.hidden, true);
   assert.doesNotMatch(JSON.stringify([...localStorage.values, ...sessionStorage.values]), /private@example\.com|Private Person/i);
@@ -170,6 +185,7 @@ test('a matching Calendly redirect is sanitized and converted once', () => {
     includeConfirmation: true
   });
   assert.equal(refresh.conversions.length, 0);
+  assert.equal(refresh.openAiCalls.filter(call => call[0] === 'measure').length, 0);
   assert.equal(refresh.confirmedContent.hidden, false);
   assert.equal(refresh.unconfirmedContent.hidden, true);
 });
@@ -336,6 +352,33 @@ test('trusted Calendly scheduled events convert once and reject invalid messages
     .filter(entry => entry[0] === 'event' && entry[1] === 'conversion');
   assert.equal(conversions.length, 1);
   assert.equal(conversions[0][2].transaction_id, inviteeUuid);
+  const openAiConversions = result.window.oaiq.q
+    .map(entry => Array.from(entry))
+    .filter(entry => entry[0] === 'measure');
+  assert.equal(openAiConversions.length, 1);
+  assert.equal(openAiConversions[0][3].event_id, inviteeUuid);
+});
+
+test('OpenAI initializes once with production debug logging disabled', () => {
+  const result = runApp();
+  assert.deepEqual(result.openAiCalls[0], [
+    'init',
+    { pixelId: 'AePTapRBZACszVQxvzZ727', debug: false }
+  ]);
+  assert.equal(result.openAiCalls.filter(call => call[0] === 'init').length, 1);
+});
+
+test('Google Ads and OpenAI conversions do not depend on each other', () => {
+  const url = `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=${inviteeUuid}`;
+  const openAiOnly = runApp({ url, includeConfirmation: true, googleAdsId: '' });
+  assert.equal(openAiOnly.conversions.length, 0);
+  assert.equal(openAiOnly.openAiCalls.filter(call => call[0] === 'measure').length, 1);
+  assert.equal(openAiOnly.confirmedContent.hidden, false);
+
+  const googleOnly = runApp({ url, includeConfirmation: true, openAiPixelId: '' });
+  assert.equal(googleOnly.conversions.length, 1);
+  assert.equal(googleOnly.openAiCalls.length, 0);
+  assert.equal(googleOnly.confirmedContent.hidden, false);
 });
 
 test('legacy tracking storage is removed', () => {
@@ -351,11 +394,23 @@ test('legacy tracking storage is removed', () => {
   assert.equal(localStorage.getItem('benzify_converted_journey_v1'), null);
 });
 
-test('only Google Ads, Clarity, and Calendly scripts are requested', () => {
+test('only Google Ads, OpenAI, Clarity, and Calendly scripts are requested', () => {
   const result = runApp();
   assert.deepEqual(result.scripts, [
     'https://www.googletagmanager.com/gtag/js?id=AW-18369421554',
+    'https://bzrcdn.openai.com/sdk/oaiq.min.js',
     'https://www.clarity.ms/tag/yjsbxks26d',
     'https://assets.calendly.com/assets/external/widget.js'
   ]);
+});
+
+test('both pages include one complete Google Tag Manager installation', () => {
+  [landingPageSource, confirmationPageSource].forEach(source => {
+    assert.equal((source.match(/googletagmanager\.com\/gtm\.js\?id=/g) || []).length, 1);
+    assert.equal((source.match(/googletagmanager\.com\/ns\.html\?id=GTM-KR7GR7C9/g) || []).length, 1);
+    assert.equal((source.match(/'GTM-KR7GR7C9'/g) || []).length, 1);
+    assert.match(source, /<head>\s*<!-- Google Tag Manager -->/);
+    assert.match(source, /<body(?:\s[^>]*)?>\s*<!-- Google Tag Manager \(noscript\) -->/);
+    assert.doesNotMatch(source, /\[https:\/\/www\.googletagmanager\.com|\\<script|\\<\/script/);
+  });
 });
