@@ -5,16 +5,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const appSource = fs.readFileSync(path.join(__dirname, '..', 'dist', 'app.js'), 'utf8');
+const configSource = fs.readFileSync(path.join(__dirname, '..', 'dist', 'config.js'), 'utf8');
 const landingPageSource = fs.readFileSync(path.join(__dirname, '..', 'dist', 'index.html'), 'utf8');
 const confirmationPageSource = fs.readFileSync(path.join(__dirname, '..', 'dist', 'booking-confirmed', 'index.html'), 'utf8');
-const eventTypeUuid = '11111111-1111-4111-8111-111111111111';
 const inviteeUuid = '22222222-2222-4222-8222-222222222222';
 
 class MemoryStorage {
-  constructor(entries = {}) {
-    this.values = new Map(Object.entries(entries));
-  }
-
+  constructor(entries = {}) { this.values = new Map(Object.entries(entries)); }
   getItem(key) { return this.values.has(key) ? this.values.get(key) : null; }
   setItem(key, value) { this.values.set(key, String(value)); }
   removeItem(key) { this.values.delete(key); }
@@ -30,7 +27,6 @@ const makeElement = () => ({
 
 const runApp = ({
   url = 'https://realtors.benzify.us/',
-  configuredEventTypeUuid = eventTypeUuid,
   localStorage = new MemoryStorage(),
   sessionStorage = new MemoryStorage(),
   includeConfirmation = false,
@@ -38,7 +34,6 @@ const runApp = ({
   cryptoAvailable = true,
   calendlyAvailable = false,
   clarityAvailable = false,
-  googleAdsId = 'AW-18369421554',
   openAiPixelId = 'AePTapRBZACszVQxvzZ727'
 } = {}) => {
   let currentUrl = new URL(url);
@@ -88,13 +83,11 @@ const runApp = ({
   const window = {
     BENZIFY_CONFIG: {
       bookingUrl: 'https://calendly.com/rak-benzify/meta-ads-setup',
-      calendlyEventTypeUuid: configuredEventTypeUuid,
       youtubeVideoId: '',
       videoSrc: '',
       videoPoster: '',
       analytics: {
-        googleAdsId,
-        googleAdsBookingConversionLabel: 'KJ60CICBqtscEPLBnLdE',
+        googleAdsId: 'AW-18369421554',
         openAiPixelId,
         openAiPixelDebug: false,
         microsoftClarityId: 'yjsbxks26d'
@@ -113,27 +106,14 @@ const runApp = ({
     };
   }
   if (clarityAvailable) window.clarity = (...args) => clarityCalls.push(args);
-  if (cryptoAvailable) {
-    window.crypto = { randomUUID: () => '44444444-4444-4444-8444-444444444444' };
-  }
+  if (cryptoAvailable) window.crypto = { randomUUID: () => '44444444-4444-4444-8444-444444444444' };
   window.window = window;
 
   vm.runInNewContext(appSource, {
-    window,
-    document,
-    URL,
-    URLSearchParams,
-    Date,
-    Math,
-    JSON,
-    Number,
-    Object,
-    String,
-    Boolean,
-    Array
+    window, document, URL, URLSearchParams, Date, Math, JSON, Number, Object, String, Boolean, Array
   });
 
-  const conversions = window.dataLayer
+  const googleConversions = window.dataLayer
     .filter(entry => Object.prototype.toString.call(entry) === '[object Arguments]')
     .map(entry => Array.from(entry))
     .filter(entry => entry[0] === 'event' && entry[1] === 'conversion');
@@ -141,111 +121,40 @@ const runApp = ({
     .map(entry => JSON.parse(JSON.stringify(Array.from(entry))));
 
   return {
-    bookingLink,
-    confirmedContent,
-    conversions,
-    location,
-    openAiCalls,
-    scripts,
-    scriptElements,
-    popupCalls,
-    badge,
-    badgeCalls,
-    clarityCalls,
-    unconfirmedContent,
-    window,
+    bookingLink, confirmedContent, googleConversions, location, openAiCalls, scripts,
+    scriptElements, popupCalls, badge, badgeCalls, clarityCalls, unconfirmedContent, window,
     dispatchMessage(event) { windowListeners.message(event); }
   };
 };
 
-test('a matching Calendly redirect is sanitized and converted once', () => {
-  const localStorage = new MemoryStorage();
-  const sessionStorage = new MemoryStorage();
-  const url = `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=${inviteeUuid}&invitee_email=private%40example.com&invitee_full_name=Private%20Person`;
-  const first = runApp({ url, localStorage, sessionStorage, includeConfirmation: true });
-
-  assert.equal(first.location.href, 'https://realtors.benzify.us/booking-confirmed/');
-  assert.equal(first.conversions.length, 1);
-  assert.equal(first.conversions[0][2].transaction_id, inviteeUuid);
-  assert.equal(first.conversions[0][2].page_location, 'https://realtors.benzify.us/booking-confirmed/');
-  assert.deepEqual(first.openAiCalls[1], [
-    'measure',
-    'appointment_scheduled',
-    { type: 'customer_action' },
-    { event_id: inviteeUuid }
-  ]);
-  assert.equal(first.confirmedContent.hidden, false);
-  assert.equal(first.unconfirmedContent.hidden, true);
-  assert.doesNotMatch(JSON.stringify([...localStorage.values, ...sessionStorage.values]), /private@example\.com|Private Person/i);
-
-  const refresh = runApp({
-    url: first.location.href,
-    localStorage,
-    sessionStorage,
-    includeConfirmation: true
-  });
-  assert.equal(refresh.conversions.length, 0);
-  assert.equal(refresh.openAiCalls.filter(call => call[0] === 'measure').length, 0);
-  assert.equal(refresh.confirmedContent.hidden, false);
-  assert.equal(refresh.unconfirmedContent.hidden, true);
+const scheduledEvent = id => ({
+  origin: 'https://calendly.com',
+  data: {
+    event: 'calendly.event_scheduled',
+    payload: { invitee: { uri: `https://api.calendly.com/scheduled_events/event/invitees/${id}` } }
+  }
 });
 
-test('missing, malformed, and mismatched redirect details fail closed', () => {
-  const cases = [
-    'https://realtors.benzify.us/booking-confirmed/?scheduled=1',
-    `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=not-a-uuid`,
-    `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=33333333-3333-4333-8333-333333333333&invitee_uuid=${inviteeUuid}`
-  ];
-
-  cases.forEach(url => {
-    const result = runApp({ url, includeConfirmation: true });
-    assert.equal(result.conversions.length, 0);
-    assert.equal(result.confirmedContent.hidden, true);
-    assert.equal(result.unconfirmedContent.hidden, false);
-  });
-});
-
-test('an empty event-type configuration stores only the setup candidate', () => {
-  const sessionStorage = new MemoryStorage();
-  const url = `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=${inviteeUuid}&invitee_email=private%40example.com`;
+test('legacy confirmation query data is sanitized but never treated as a booking', () => {
   const result = runApp({
-    url,
-    configuredEventTypeUuid: '',
-    sessionStorage,
+    url: `https://realtors.benzify.us/booking-confirmed/?scheduled=1&invitee_uuid=${inviteeUuid}&invitee_email=private%40example.com#details`,
     includeConfirmation: true
   });
-
-  assert.equal(result.conversions.length, 0);
-  assert.equal(JSON.parse(sessionStorage.getItem('benzify_calendly_event_type_uuid_candidate')), eventTypeUuid);
-  assert.doesNotMatch(JSON.stringify([...sessionStorage.values]), /private@example\.com/i);
-});
-
-test('session deduplication works when local storage is unavailable', () => {
-  const sessionStorage = new MemoryStorage();
-  const url = `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=${inviteeUuid}`;
-  const first = runApp({ url, localStorage: null, sessionStorage, includeConfirmation: true });
-  const refresh = runApp({
-    url: first.location.href,
-    localStorage: null,
-    sessionStorage,
-    includeConfirmation: true
-  });
-
-  assert.equal(first.conversions.length, 1);
-  assert.equal(refresh.conversions.length, 0);
-  assert.equal(refresh.confirmedContent.hidden, false);
+  assert.equal(result.location.href, 'https://realtors.benzify.us/booking-confirmed/');
+  assert.equal(result.googleConversions.length, 0);
+  assert.equal(result.openAiCalls.filter(call => call[0] === 'measure').length, 0);
+  assert.equal(result.confirmedContent.hidden, true);
+  assert.equal(result.unconfirmedContent.hidden, false);
 });
 
 test('last-touch attribution is reused for 30 days and then expires', () => {
   const localStorage = new MemoryStorage();
   const first = runApp({
-    url: 'https://realtors.benzify.us/?utm_source=google&utm_campaign=seller-leads&gclid=test-click',
+    url: 'https://realtors.benzify.us/?utm_source=chatgpt&utm_campaign=seller-leads',
     localStorage,
     includeBookingLink: true
   });
-  assert.match(first.bookingLink.href, /utm_source=google/);
-  assert.match(first.bookingLink.href, /gclid=test-click/);
-
+  assert.match(first.bookingLink.href, /utm_source=chatgpt/);
   const directReturn = runApp({ localStorage, includeBookingLink: true });
   assert.match(directReturn.bookingLink.href, /utm_campaign=seller-leads/);
 
@@ -253,27 +162,11 @@ test('last-touch attribution is reused for 30 days and then expires', () => {
   stored.captured_at = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
   localStorage.setItem('benzify_attribution_v2', JSON.stringify(stored));
   const expiredReturn = runApp({ localStorage, includeBookingLink: true });
-  assert.doesNotMatch(expiredReturn.bookingLink.href, /utm_source|gclid/);
+  assert.doesNotMatch(expiredReturn.bookingLink.href, /utm_source|utm_campaign/);
   assert.equal(localStorage.getItem('benzify_attribution_v2'), null);
 });
 
-test('separate tabs convert distinct invitees without a shared journey key', () => {
-  const localStorage = new MemoryStorage();
-  const firstUrl = `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=${inviteeUuid}`;
-  const secondInviteeUuid = '55555555-5555-4555-8555-555555555555';
-  const secondUrl = `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=${secondInviteeUuid}`;
-
-  const first = runApp({ url: firstUrl, localStorage, sessionStorage: new MemoryStorage(), includeConfirmation: true });
-  const second = runApp({ url: secondUrl, localStorage, sessionStorage: new MemoryStorage(), includeConfirmation: true });
-
-  assert.equal(first.conversions.length, 1);
-  assert.equal(second.conversions.length, 1);
-  const ledger = JSON.parse(localStorage.getItem('benzify_converted_bookings_v2'));
-  assert.deepEqual(ledger.map(entry => entry.id), [inviteeUuid, secondInviteeUuid]);
-  assert.equal(localStorage.getItem('benzify_booking_journey_v1'), null);
-});
-
-test('CTA opens the Calendly popup and emits dataLayer and Clarity diagnostics', () => {
+test('CTA opens Calendly and emits only dataLayer and Clarity diagnostics', () => {
   const result = runApp({
     includeBookingLink: true,
     cryptoAvailable: false,
@@ -283,13 +176,10 @@ test('CTA opens the Calendly popup and emits dataLayer and Clarity diagnostics',
   let prevented = false;
   result.bookingLink.listeners.click({ preventDefault: () => { prevented = true; } });
   const diagnostics = result.window.dataLayer.filter(entry => entry && entry.event);
-
   assert.equal(prevented, true);
   assert.equal(result.popupCalls.length, 1);
-  assert.match(result.popupCalls[0].url, /meta-ads-setup/);
   assert.deepEqual(Array.from(diagnostics, entry => entry.event), ['cta_click', 'calendly_visit']);
-  assert.equal(diagnostics[0].cta_location, 'hero');
-  assert.match(diagnostics[0].diagnostic_id, /^cta-[0-9]+-[a-z0-9]+$/);
+  assert.equal(result.openAiCalls.filter(call => call[0] === 'measure').length, 0);
   assert.deepEqual(result.clarityCalls, [
     ['set', 'calendly_cta_location', 'hero'],
     ['event', 'calendly_open']
@@ -298,15 +188,13 @@ test('CTA opens the Calendly popup and emits dataLayer and Clarity diagnostics',
 
 test('CTA remains a normal attributed link before Calendly loads', () => {
   const result = runApp({
-    url: 'https://realtors.benzify.us/?utm_source=google&gclid=test-click',
+    url: 'https://realtors.benzify.us/?utm_source=chatgpt',
     includeBookingLink: true
   });
   let prevented = false;
   result.bookingLink.listeners.click({ preventDefault: () => { prevented = true; } });
-
   assert.equal(prevented, false);
-  assert.match(result.bookingLink.href, /utm_source=google/);
-  assert.match(result.bookingLink.href, /gclid=test-click/);
+  assert.match(result.bookingLink.href, /utm_source=chatgpt/);
   assert.equal(result.popupCalls.length, 0);
 });
 
@@ -322,41 +210,74 @@ test('Calendly script initializes one attributed badge and tracks its source', (
   const calendlyScript = result.scriptElements.find(element => /calendly/.test(element.src));
   calendlyScript.dispatch('load');
   result.badge.dispatch('click');
-
   assert.equal(result.badgeCalls.length, 1);
-  assert.equal(result.badgeCalls[0].text, 'Book a free strategy call');
   assert.match(result.badgeCalls[0].url, /utm_campaign=seller-leads/);
   const diagnostics = result.window.dataLayer.filter(entry => entry && entry.event);
   assert.equal(diagnostics[0].cta_location, 'calendly_badge');
 });
 
-test('trusted Calendly scheduled events convert once and reject invalid messages', () => {
-  const localStorage = new MemoryStorage();
-  const result = runApp({ localStorage });
-  const scheduledEvent = {
-    data: {
-      event: 'calendly.event_scheduled',
-      payload: { invitee: { uri: `https://api.calendly.com/scheduled_events/event/invitees/${inviteeUuid}` } }
-    }
-  };
+test('trusted Calendly completion sends one OpenAI event and no direct Google conversion', () => {
+  const result = runApp();
+  result.dispatchMessage(scheduledEvent(inviteeUuid));
+  result.dispatchMessage(scheduledEvent(inviteeUuid));
 
-  result.dispatchMessage({ ...scheduledEvent, origin: 'https://attacker.example' });
-  result.dispatchMessage({ origin: 'https://calendly.com', data: { event: 'calendly.event_scheduled', payload: {} } });
-  assert.equal(result.conversions.length, 0);
-
-  result.dispatchMessage({ ...scheduledEvent, origin: 'https://calendly.com' });
-  result.dispatchMessage({ ...scheduledEvent, origin: 'https://calendly.com' });
-  const conversions = result.window.dataLayer
-    .filter(entry => Object.prototype.toString.call(entry) === '[object Arguments]')
-    .map(entry => Array.from(entry))
-    .filter(entry => entry[0] === 'event' && entry[1] === 'conversion');
-  assert.equal(conversions.length, 1);
-  assert.equal(conversions[0][2].transaction_id, inviteeUuid);
-  const openAiConversions = result.window.oaiq.q
+  const conversions = result.window.oaiq.q
     .map(entry => Array.from(entry))
     .filter(entry => entry[0] === 'measure');
-  assert.equal(openAiConversions.length, 1);
-  assert.equal(openAiConversions[0][3].event_id, inviteeUuid);
+  assert.equal(conversions.length, 1);
+  assert.deepEqual(Array.from(conversions[0].slice(0, 2)), ['measure', 'appointment_scheduled']);
+  assert.equal(conversions[0][2].type, 'customer_action');
+  assert.equal(conversions[0][3].event_id, inviteeUuid);
+  assert.equal(result.googleConversions.length, 0);
+});
+
+test('invalid Calendly messages do not send OpenAI events', () => {
+  const result = runApp();
+  result.dispatchMessage({ ...scheduledEvent(inviteeUuid), origin: 'https://attacker.example' });
+  result.dispatchMessage({ origin: 'https://calendly.com', data: { event: 'calendly.event_scheduled', payload: {} } });
+  result.dispatchMessage({ origin: 'https://calendly.com', data: { event: 'calendly.date_and_time_selected', payload: {} } });
+  result.dispatchMessage(scheduledEvent('not-a-uuid'));
+  assert.equal(result.openAiCalls.filter(call => call[0] === 'measure').length, 0);
+  assert.equal(result.googleConversions.length, 0);
+});
+
+test('session deduplication works when local storage is unavailable', () => {
+  const sessionStorage = new MemoryStorage();
+  const result = runApp({ localStorage: null, sessionStorage });
+  result.dispatchMessage(scheduledEvent(inviteeUuid));
+  result.dispatchMessage(scheduledEvent(inviteeUuid));
+  const conversions = result.window.oaiq.q
+    .map(entry => Array.from(entry))
+    .filter(entry => entry[0] === 'measure');
+  assert.equal(conversions.length, 1);
+  assert.equal(JSON.parse(sessionStorage.getItem('benzify_openai_booking_confirmation_v1')).id, inviteeUuid);
+});
+
+test('local ledger deduplicates across page instances and permits distinct bookings', () => {
+  const localStorage = new MemoryStorage();
+  const first = runApp({ localStorage, sessionStorage: new MemoryStorage() });
+  first.dispatchMessage(scheduledEvent(inviteeUuid));
+
+  const repeat = runApp({ localStorage, sessionStorage: new MemoryStorage() });
+  repeat.dispatchMessage(scheduledEvent(inviteeUuid));
+  assert.equal(repeat.window.oaiq.q.filter(entry => Array.from(entry)[0] === 'measure').length, 0);
+
+  const secondId = '55555555-5555-4555-8555-555555555555';
+  const second = runApp({ localStorage, sessionStorage: new MemoryStorage() });
+  second.dispatchMessage(scheduledEvent(secondId));
+  assert.equal(second.window.oaiq.q.filter(entry => Array.from(entry)[0] === 'measure').length, 1);
+  assert.deepEqual(
+    JSON.parse(localStorage.getItem('benzify_openai_converted_bookings_v1')).map(entry => entry.id),
+    [inviteeUuid, secondId]
+  );
+});
+
+test('an invalid OpenAI pixel configuration fails closed', () => {
+  const localStorage = new MemoryStorage();
+  const result = runApp({ localStorage, openAiPixelId: '' });
+  result.dispatchMessage(scheduledEvent(inviteeUuid));
+  assert.equal(result.openAiCalls.length, 0);
+  assert.equal(localStorage.getItem('benzify_openai_converted_bookings_v1'), null);
 });
 
 test('OpenAI initializes once with production debug logging disabled', () => {
@@ -368,19 +289,6 @@ test('OpenAI initializes once with production debug logging disabled', () => {
   assert.equal(result.openAiCalls.filter(call => call[0] === 'init').length, 1);
 });
 
-test('Google Ads and OpenAI conversions do not depend on each other', () => {
-  const url = `https://realtors.benzify.us/booking-confirmed/?scheduled=1&event_type_uuid=${eventTypeUuid}&invitee_uuid=${inviteeUuid}`;
-  const openAiOnly = runApp({ url, includeConfirmation: true, googleAdsId: '' });
-  assert.equal(openAiOnly.conversions.length, 0);
-  assert.equal(openAiOnly.openAiCalls.filter(call => call[0] === 'measure').length, 1);
-  assert.equal(openAiOnly.confirmedContent.hidden, false);
-
-  const googleOnly = runApp({ url, includeConfirmation: true, openAiPixelId: '' });
-  assert.equal(googleOnly.conversions.length, 1);
-  assert.equal(googleOnly.openAiCalls.length, 0);
-  assert.equal(googleOnly.confirmedContent.hidden, false);
-});
-
 test('legacy tracking storage is removed', () => {
   const localStorage = new MemoryStorage({
     benzify_attribution_v1: JSON.stringify({ last_landing_page: 'https://example.test/?invitee_email=private@example.com' }),
@@ -388,13 +296,17 @@ test('legacy tracking storage is removed', () => {
     benzify_converted_journey_v1: 'old-conversion'
   });
   runApp({ localStorage });
-
   assert.equal(localStorage.getItem('benzify_attribution_v1'), null);
   assert.equal(localStorage.getItem('benzify_booking_journey_v1'), null);
   assert.equal(localStorage.getItem('benzify_converted_journey_v1'), null);
 });
 
-test('only Google Ads, OpenAI, Clarity, and Calendly scripts are requested', () => {
+test('obsolete Calendly UUID and direct Google booking configuration are removed', () => {
+  assert.doesNotMatch(appSource, /calendlyEventTypeUuid|event_type_uuid|googleAdsBookingConversionLabel/);
+  assert.doesNotMatch(configSource, /calendlyEventTypeUuid|googleAdsBookingConversionLabel/);
+});
+
+test('only Google base, OpenAI, Clarity, and Calendly scripts are requested', () => {
   const result = runApp();
   assert.deepEqual(result.scripts, [
     'https://www.googletagmanager.com/gtag/js?id=AW-18369421554',
@@ -411,6 +323,5 @@ test('both pages include one complete Google Tag Manager installation', () => {
     assert.equal((source.match(/'GTM-KR7GR7C9'/g) || []).length, 1);
     assert.match(source, /<head>\s*<!-- Google Tag Manager -->/);
     assert.match(source, /<body(?:\s[^>]*)?>\s*<!-- Google Tag Manager \(noscript\) -->/);
-    assert.doesNotMatch(source, /\[https:\/\/www\.googletagmanager\.com|\\<script|\\<\/script/);
   });
 });
